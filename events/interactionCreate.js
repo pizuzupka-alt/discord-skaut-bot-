@@ -1,3 +1,5 @@
+console.log("[DEBUG] Načten interactionCreate handler");
+
 const logger = require('../utils/logger');
 
 module.exports = {
