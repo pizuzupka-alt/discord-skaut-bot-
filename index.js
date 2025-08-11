@@ -50,7 +50,7 @@ if (fs.existsSync(eventsPath)) {
 }
 
 // Jediný messageCreate handler
-client.on('messageCreate', message => {
+{
     if (!message.content.startsWith('!') || message.author.bot) return;
 
     const args = message.content.slice(1).trim().split(/ +/);
