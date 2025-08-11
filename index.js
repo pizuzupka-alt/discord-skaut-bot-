@@ -1,80 +1,28 @@
+require('dotenv').config();
 const express = require('express');
-const server = express();
+const { Client, GatewayIntentBits } = require('discord.js');
 
+// Express server pro Render
+const server = express();
 server.all('/', (req, res) => {
     res.send('Bot běží!');
 });
-
-server.listen(3000, () => {
-    console.log('🌐 Server je připraven.');
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🌐 Server běží na portu ${PORT}`);
 });
 
-const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const config = require('./config');
-const logger = require('./utils/logger');
-const commandHandler = require('./handlers/commandHandler');
-const eventHandler = require('./handlers/eventHandler');
-
-// Create a new client instance
+// Discord bot
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.GuildVoiceStates
+        GatewayIntentBits.MessageContent
     ]
 });
 
-// Initialize collections
-client.commands = new Collection();
-client.config = config;
-
-// Load commands and events
-async function initialize() {
-    try {
-        logger.info('Spouštím inicializaci bota...');
-        
-        // Load commands
-        await commandHandler.loadCommands(client);
-        logger.info('Příkazy načteny úspěšně');
-        
-        // Load events
-        await eventHandler.loadEvents(client);
-        logger.info('Události načteny úspěšně');
-        
-        // Login to Discord
-        await client.login(config.token);
-        
-    } catch (error) {
-        logger.error('Nepodařilo se inicializovat bota:', error);
-        process.exit(1);
-    }
-}
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', error => {
-    logger.error('Nezvládnuté odmítnutí promise:', error);
+client.once('ready', () => {
+    console.log(`✅ Bot je online jako ${client.user.tag}!`);
 });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', error => {
-    logger.error('Nezachycená výjimka:', error);
-    process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-    logger.info('Přijat SIGINT, ukončuji s elegantě...');
-    client.destroy();
-    process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-    logger.info('Přijat SIGTERM, ukončuji s elegantě...');
-    client.destroy();
-    process.exit(0);
-});
-
-// Start the bot
-initialize();
+client.login(process.env.DISCORD_TOKEN);
