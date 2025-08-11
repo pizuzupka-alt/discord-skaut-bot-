@@ -4,6 +4,7 @@ const path = require('path');
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
 require('dotenv').config();
 
+// Vytvoření klienta
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -13,6 +14,7 @@ const client = new Client({
     ]
 });
 
+// Kolekce pro příkazy
 client.commands = new Collection();
 client.config = {
     presence: {
@@ -36,21 +38,21 @@ if (fs.existsSync(commandsPath)) {
     }
 }
 
-// Načtení eventů – ⚠ sem NEpřidávej další messageCreate, aby nebyly dvojité odpovědi
+// Načtení ostatních eventů (bez messageCreate)
 const eventsPath = path.join(__dirname, 'events');
 if (fs.existsSync(eventsPath)) {
     const eventFiles = fs.readdirSync(eventsPath).filter(f => f.endsWith('.js'));
     for (const file of eventFiles) {
         const event = require(path.join(eventsPath, file));
-        if (event.name === 'messageCreate') continue; // přeskakujeme, řešíme níže
+        if (event.name === 'messageCreate') continue; // řešíme níže
         if (event.once) client.once(event.name, (...args) => event.execute(...args, client));
         else client.on(event.name, (...args) => event.execute(...args, client));
         console.log(`[INFO] Načten event: ${event.name}`);
     }
 }
 
-// Jediný messageCreate handler
-{
+// Jediný handler pro příkazy
+client.on('messageCreate', message => {
     if (!message.content.startsWith('!') || message.author.bot) return;
 
     const args = message.content.slice(1).trim().split(/ +/);
@@ -58,7 +60,9 @@ if (fs.existsSync(eventsPath)) {
 
     console.log(`Příkaz detekován: ${commandName}`);
 
-    const command = client.commands.get(commandName);
+    const command = client.commands.get(commandName) 
+        || client.commands.find(cmd => cmd.data.aliases && cmd.data.aliases.includes(commandName));
+
     if (!command) {
         console.log(`[WARNING] Příkaz '${commandName}' nebyl nalezen`);
         return;
