@@ -67,6 +67,22 @@ if (fs.existsSync(eventsPath)) {
     console.warn(`[WARNING] Složka events neexistuje`);
 }
 
+client.on('messageCreate', message => {
+    console.log(`Zpráva od ${message.author.tag}: ${message.content}`);
+
+    if (!message.content.startsWith('!')) return;
+
+    // zde načítáš příkazy podle message.content
+    // například:
+    const args = message.content.slice(1).split(/ +/);
+    const commandName = args.shift().toLowerCase();
+
+    console.log(`Příkaz detekován: ${commandName}`);
+
+    // a tady voláš execute z tvého modulu clear, pokud commandName === 'clear'
+});
+
+
 // Error handling
 client.on('error', console.error);
 client.on('warn', console.warn);
