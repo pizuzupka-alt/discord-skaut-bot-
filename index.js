@@ -49,6 +49,20 @@ if (fs.existsSync(eventsPath)) {
     }
 }
 
+// Jediný messageCreate handler
+client.on('messageCreate', message => {
+    if (!message.content.startsWith('!') || message.author.bot) return;
+
+    const args = message.content.slice(1).trim().split(/ +/);
+    const commandName = args.shift().toLowerCase();
+
+    console.log(`Příkaz detekován: ${commandName}`);
+
+    const command = client.commands.get(commandName);
+    if (!command) {
+        console.log(`[WARNING] Příkaz '${commandName}' nebyl nalezen`);
+        return;
+    }
 
     try {
         command.execute(message, args, client);
