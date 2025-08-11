@@ -1,339 +1,366 @@
-const { db } = require('./db');
-const { users, transactions, inventory, investments, jobs } = require('../shared/schema');
-const { eq, desc, sql } = require('drizzle-orm');
+const Database = require('better-sqlite3');
+const path = require('path');
 
 class EconomyService {
-  // Získání nebo vytvoření uživatele
-  async getOrCreateUser(discordId, username) {
-    let [user] = await db.select().from(users).where(eq(users.id, discordId));
-    
-    if (!user) {
-      const insertUser = {
-        id: discordId,
-        username: username,
-        money: '1000.00',
-        bank: '0.00',
-        experience: 0,
-        level: 1,
-        job: 'nezaměstnaný',
-      };
-      
-      [user] = await db.insert(users).values(insertUser).returning();
+    constructor() {
+        this.db = new Database(path.join(process.cwd(), 'economy.db'));
+        this.initDatabase();
     }
-    
-    return user;
-  }
 
-  // Aktualizace peněz uživatele
-  async updateUserMoney(userId, amount, type = 'add') {
-    const user = await this.getOrCreateUser(userId, '');
-    const currentMoney = parseFloat(user.money);
-    const changeAmount = parseFloat(amount);
-    
-    const newAmount = type === 'add' ? currentMoney + changeAmount : currentMoney - changeAmount;
-    
-    await db.update(users)
-      .set({ 
-        money: newAmount.toFixed(2),
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-  }
+    initDatabase() {
+        // Vytvoř všechny tabulky
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT,
+                money TEXT DEFAULT '1000.00',
+                bank TEXT DEFAULT '0.00',
+                experience INTEGER DEFAULT 0,
+                level INTEGER DEFAULT 1,
+                job TEXT DEFAULT 'nezaměstnaný',
+                last_daily TEXT,
+                last_work TEXT,
+                last_rob TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
 
-  // Přidání transakce do historie
-  async addTransaction(userId, type, amount, description) {
-    const transaction = {
-      userId,
-      type,
-      amount,
-      description,
-    };
-    
-    await db.insert(transactions).values(transaction);
-  }
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                userId TEXT,
+                type TEXT,
+                amount TEXT,
+                description TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
 
-  // Denní bonus
-  async claimDaily(userId, username) {
-    const user = await this.getOrCreateUser(userId, username);
-    const now = new Date();
-    
-    if (user.lastDaily) {
-      const nextDaily = new Date(user.lastDaily);
-      nextDaily.setHours(nextDaily.getHours() + 24);
-      
-      if (now < nextDaily) {
+            CREATE TABLE IF NOT EXISTS inventory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                userId TEXT,
+                itemName TEXT,
+                itemType TEXT,
+                quantity INTEGER DEFAULT 1,
+                value TEXT DEFAULT '0.00',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS investments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                userId TEXT,
+                name TEXT,
+                amount TEXT,
+                type TEXT,
+                buyPrice TEXT,
+                currentPrice TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+    }
+
+    // Získání nebo vytvoření uživatele
+    async getOrCreateUser(discordId, username) {
+        let user = this.db.prepare('SELECT * FROM users WHERE id = ?').get(discordId);
+        
+        if (!user) {
+            this.db.prepare(`
+                INSERT INTO users (id, username, money, bank, experience, level, job)
+                VALUES (?, ?, '1000.00', '0.00', 0, 1, 'nezaměstnaný')
+            `).run(discordId, username);
+            
+            user = this.db.prepare('SELECT * FROM users WHERE id = ?').get(discordId);
+        }
+        
+        return user;
+    }
+
+    // Aktualizace peněz
+    async updateUserMoney(userId, amount, type = 'add') {
+        const user = await this.getOrCreateUser(userId, '');
+        const currentMoney = parseFloat(user.money);
+        const changeAmount = parseFloat(amount);
+        
+        const newAmount = type === 'add' ? currentMoney + changeAmount : currentMoney - changeAmount;
+        
+        this.db.prepare(`
+            UPDATE users 
+            SET money = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(newAmount.toFixed(2), userId);
+    }
+
+    // Přidání transakce
+    async addTransaction(userId, type, amount, description) {
+        this.db.prepare(`
+            INSERT INTO transactions (userId, type, amount, description)
+            VALUES (?, ?, ?, ?)
+        `).run(userId, type, amount, description);
+    }
+
+    // Denní bonus
+    async claimDaily(userId, username) {
+        const user = await this.getOrCreateUser(userId, username);
+        const now = new Date();
+        
+        if (user.last_daily) {
+            const lastDaily = new Date(user.last_daily);
+            const nextDaily = new Date(lastDaily);
+            nextDaily.setHours(nextDaily.getHours() + 24);
+            
+            if (now < nextDaily) {
+                return { 
+                    success: false, 
+                    error: 'Další denní bonus můžeš získat za',
+                    nextDaily 
+                };
+            }
+        }
+        
+        const dailyAmount = Math.floor(Math.random() * 500) + 200; // 200-699
+        
+        this.db.prepare(`
+            UPDATE users 
+            SET last_daily = ?, money = ?, experience = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(
+            now.toISOString(),
+            (parseFloat(user.money) + dailyAmount).toFixed(2),
+            user.experience + 10,
+            userId
+        );
+        
+        await this.addTransaction(userId, 'daily', dailyAmount.toString(), 'Denní bonus');
+        
+        return { success: true, amount: dailyAmount };
+    }
+
+    // Práce
+    async work(userId, username) {
+        const user = await this.getOrCreateUser(userId, username);
+        const now = new Date();
+        
+        if (user.last_work) {
+            const lastWork = new Date(user.last_work);
+            const nextWork = new Date(lastWork);
+            nextWork.setHours(nextWork.getHours() + 1);
+            
+            if (now < nextWork) {
+                return { 
+                    success: false, 
+                    error: 'Další práci můžeš vykonat za',
+                    nextWork 
+                };
+            }
+        }
+        
+        const baseAmount = user.job === 'nezaměstnaný' ? 50 : 100;
+        const levelBonus = user.level * 10;
+        const workAmount = Math.floor(Math.random() * (baseAmount + levelBonus)) + baseAmount;
+        
+        this.db.prepare(`
+            UPDATE users 
+            SET last_work = ?, money = ?, experience = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(
+            now.toISOString(),
+            (parseFloat(user.money) + workAmount).toFixed(2),
+            user.experience + 5,
+            userId
+        );
+        
+        await this.addTransaction(userId, 'work', workAmount.toString(), `Práce jako ${user.job}`);
+        
+        return { success: true, amount: workAmount };
+    }
+
+    // Automaty
+    async playSlots(userId, username, betAmount) {
+        const user = await this.getOrCreateUser(userId, username);
+        const userMoney = parseFloat(user.money);
+        
+        if (userMoney < betAmount) {
+            return { success: false, won: false, error: 'Nemáš dostatek peněz!' };
+        }
+        
+        if (betAmount < 10) {
+            return { success: false, won: false, error: 'Minimální sázka je 10 peněz!' };
+        }
+
+        const symbols = ['🍎', '🍊', '🍋', '🍇', '🔔', '⭐', '💎'];
+        const result = [
+            symbols[Math.floor(Math.random() * symbols.length)],
+            symbols[Math.floor(Math.random() * symbols.length)],
+            symbols[Math.floor(Math.random() * symbols.length)]
+        ];
+        
+        let winAmount = 0;
+        let won = false;
+        
+        if (result[0] === result[1] && result[1] === result[2]) {
+            if (result[0] === '💎') winAmount = betAmount * 10;
+            else if (result[0] === '⭐') winAmount = betAmount * 7;
+            else if (result[0] === '🔔') winAmount = betAmount * 5;
+            else winAmount = betAmount * 3;
+            won = true;
+        } else if (result[0] === result[1] || result[1] === result[2] || result[0] === result[2]) {
+            winAmount = betAmount * 1.5;
+            won = true;
+        }
+        
+        const finalAmount = won ? (userMoney - betAmount + winAmount) : (userMoney - betAmount);
+        
+        this.db.prepare(`
+            UPDATE users 
+            SET money = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(finalAmount.toFixed(2), userId);
+        
+        const transactionAmount = won ? (winAmount - betAmount).toString() : (-betAmount).toString();
+        await this.addTransaction(userId, 'gamble', transactionAmount, 'Automaty');
+        
         return { 
-          success: false, 
-          error: 'Další denní bonus můžeš získat za',
-          nextDaily 
+            success: true, 
+            won, 
+            amount: won ? winAmount : 0, 
+            symbols: result, 
+            balance: finalAmount 
         };
-      }
-    }
-    
-    const dailyAmount = Math.floor(Math.random() * 500) + 200; // 200-699 peněz
-    
-    await db.update(users)
-      .set({ 
-        lastDaily: now,
-        money: (parseFloat(user.money) + dailyAmount).toFixed(2),
-        experience: user.experience + 10,
-        updatedAt: now
-      })
-      .where(eq(users.id, userId));
-      
-    await this.addTransaction(userId, 'daily', dailyAmount.toString(), 'Denní bonus');
-    
-    return { success: true, amount: dailyAmount };
-  }
-
-  // Práce
-  async work(userId, username) {
-    const user = await this.getOrCreateUser(userId, username);
-    const now = new Date();
-    
-    if (user.lastWork) {
-      const nextWork = new Date(user.lastWork);
-      nextWork.setHours(nextWork.getHours() + 1);
-      
-      if (now < nextWork) {
-        return { 
-          success: false, 
-          error: 'Další práci můžeš vykonat za',
-          nextWork 
-        };
-      }
-    }
-    
-    // Výdělek závisí na povolání a levelu
-    const baseAmount = user.job === 'nezaměstnaný' ? 50 : 100;
-    const levelBonus = user.level * 10;
-    const workAmount = Math.floor(Math.random() * (baseAmount + levelBonus)) + baseAmount;
-    
-    await db.update(users)
-      .set({ 
-        lastWork: now,
-        money: (parseFloat(user.money) + workAmount).toFixed(2),
-        experience: user.experience + 5,
-        updatedAt: now
-      })
-      .where(eq(users.id, userId));
-      
-    await this.addTransaction(userId, 'work', workAmount.toString(), `Práce jako ${user.job}`);
-    
-    return { success: true, amount: workAmount };
-  }
-
-  // Hazard - automaty
-  async playSlots(userId, username, betAmount) {
-    const user = await this.getOrCreateUser(userId, username);
-    const userMoney = parseFloat(user.money);
-    
-    if (userMoney < betAmount) {
-      return { success: false, won: false, error: 'Nemáš dostatek peněz!' };
-    }
-    
-    if (betAmount < 10) {
-      return { success: false, won: false, error: 'Minimální sázka je 10 peněz!' };
     }
 
-    const symbols = ['🍎', '🍊', '🍋', '🍇', '🔔', '⭐', '💎'];
-    const result = [
-      symbols[Math.floor(Math.random() * symbols.length)],
-      symbols[Math.floor(Math.random() * symbols.length)],
-      symbols[Math.floor(Math.random() * symbols.length)]
-    ];
-    
-    let winAmount = 0;
-    let won = false;
-    
-    // Vyhodnocení výhry
-    if (result[0] === result[1] && result[1] === result[2]) {
-      // Tři stejné
-      if (result[0] === '💎') winAmount = betAmount * 10;
-      else if (result[0] === '⭐') winAmount = betAmount * 7;
-      else if (result[0] === '🔔') winAmount = betAmount * 5;
-      else winAmount = betAmount * 3;
-      won = true;
-    } else if (result[0] === result[1] || result[1] === result[2] || result[0] === result[2]) {
-      // Dva stejné
-      winAmount = betAmount * 1.5;
-      won = true;
+    // Vklad do banky
+    async deposit(userId, username, amount) {
+        const user = await this.getOrCreateUser(userId, username);
+        const userMoney = parseFloat(user.money);
+        
+        if (userMoney < amount) {
+            return { success: false, error: 'Nemáš dostatek peněz v hotovosti!' };
+        }
+        
+        this.db.prepare(`
+            UPDATE users 
+            SET money = ?, bank = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(
+            (userMoney - amount).toFixed(2),
+            (parseFloat(user.bank) + amount).toFixed(2),
+            userId
+        );
+        
+        await this.addTransaction(userId, 'deposit', amount.toString(), 'Vklad do banky');
+        
+        return { success: true };
     }
-    
-    const finalAmount = won ? (userMoney - betAmount + winAmount) : (userMoney - betAmount);
-    
-    await db.update(users)
-      .set({ 
-        money: finalAmount.toFixed(2),
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-      
-    const transactionAmount = won ? (winAmount - betAmount).toString() : (-betAmount).toString();
-    await this.addTransaction(userId, 'gamble', transactionAmount, 'Automaty');
-    
-    return { 
-      success: true, 
-      won, 
-      amount: won ? winAmount : 0, 
-      symbols: result, 
-      balance: finalAmount 
-    };
-  }
 
-  // Převod peněz do banky
-  async deposit(userId, username, amount) {
-    const user = await this.getOrCreateUser(userId, username);
-    const userMoney = parseFloat(user.money);
-    
-    if (userMoney < amount) {
-      return { success: false, error: 'Nemáš dostatek peněz v hotovosti!' };
+    // Výběr z banky
+    async withdraw(userId, username, amount) {
+        const user = await this.getOrCreateUser(userId, username);
+        const userBank = parseFloat(user.bank);
+        
+        if (userBank < amount) {
+            return { success: false, error: 'Nemáš dostatek peněz v bance!' };
+        }
+        
+        this.db.prepare(`
+            UPDATE users 
+            SET money = ?, bank = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(
+            (parseFloat(user.money) + amount).toFixed(2),
+            (userBank - amount).toFixed(2),
+            userId
+        );
+        
+        await this.addTransaction(userId, 'withdraw', amount.toString(), 'Výběr z banky');
+        
+        return { success: true };
     }
-    
-    await db.update(users)
-      .set({ 
-        money: (userMoney - amount).toFixed(2),
-        bank: (parseFloat(user.bank) + amount).toFixed(2),
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-      
-    await this.addTransaction(userId, 'deposit', amount.toString(), 'Vklad do banky');
-    
-    return { success: true };
-  }
 
-  // Výběr peněz z banky
-  async withdraw(userId, username, amount) {
-    const user = await this.getOrCreateUser(userId, username);
-    const userBank = parseFloat(user.bank);
-    
-    if (userBank < amount) {
-      return { success: false, error: 'Nemáš dostatek peněz v bance!' };
+    // Žebříček
+    async getLeaderboard(limit = 10) {
+        return this.db.prepare(`
+            SELECT * FROM users 
+            ORDER BY (CAST(money AS REAL) + CAST(bank AS REAL)) DESC 
+            LIMIT ?
+        `).all(limit);
     }
-    
-    await db.update(users)
-      .set({ 
-        money: (parseFloat(user.money) + amount).toFixed(2),
-        bank: (userBank - amount).toFixed(2),
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-      
-    await this.addTransaction(userId, 'withdraw', amount.toString(), 'Výběr z banky');
-    
-    return { success: true };
-  }
 
-  // Žebříček nejbohatších (řazeno podle celkového bohatství)
-  async getLeaderboard(limit = 10) {
-    return await db
-      .select()
-      .from(users)
-      .orderBy(desc(sql`CAST(money AS DECIMAL) + CAST(bank AS DECIMAL)`))
-      .limit(limit);
-  }
+    // Inventář
+    async addInventoryItem(userId, itemName, itemType, value, quantity = 1) {
+        const existingItem = this.db.prepare(`
+            SELECT * FROM inventory 
+            WHERE userId = ? AND itemName = ?
+        `).get(userId, itemName);
 
-  // Přidání předmětu do inventáře
-  async addInventoryItem(userId, itemName, itemType, value, quantity = 1) {
-    // Zkontroluj, jestli už předmět nemá
-    const [existingItem] = await db
-      .select()
-      .from(inventory)
-      .where(eq(inventory.userId, userId))
-      .where(eq(inventory.itemName, itemName));
-
-    if (existingItem) {
-      // Zvýš množství
-      await db
-        .update(inventory)
-        .set({ 
-          quantity: existingItem.quantity + quantity,
-          updatedAt: new Date()
-        })
-        .where(eq(inventory.id, existingItem.id));
-    } else {
-      // Přidej nový předmět
-      const insertItem = {
-        userId,
-        itemName,
-        itemType,
-        quantity,
-        value: value.toString()
-      };
-      
-      await db.insert(inventory).values(insertItem);
+        if (existingItem) {
+            this.db.prepare(`
+                UPDATE inventory 
+                SET quantity = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `).run(existingItem.quantity + quantity, existingItem.id);
+        } else {
+            this.db.prepare(`
+                INSERT INTO inventory (userId, itemName, itemType, quantity, value)
+                VALUES (?, ?, ?, ?, ?)
+            `).run(userId, itemName, itemType, quantity, value.toString());
+        }
     }
-  }
 
-  // Získání inventáře uživatele
-  async getInventory(userId) {
-    return await db
-      .select()
-      .from(inventory)
-      .where(eq(inventory.userId, userId))
-      .orderBy(desc(inventory.value));
-  }
+    async getInventory(userId) {
+        return this.db.prepare(`
+            SELECT * FROM inventory 
+            WHERE userId = ? 
+            ORDER BY CAST(value AS REAL) DESC
+        `).all(userId);
+    }
 
-  // Zkontroluj, jestli má uživatel předmět
-  async hasInventoryItem(userId, itemName) {
-    const [item] = await db
-      .select()
-      .from(inventory)
-      .where(eq(inventory.userId, userId))
-      .where(eq(inventory.itemName, itemName));
-    
-    return !!item;
-  }
+    async hasInventoryItem(userId, itemName) {
+        const item = this.db.prepare(`
+            SELECT * FROM inventory 
+            WHERE userId = ? AND itemName = ?
+        `).get(userId, itemName);
+        
+        return !!item;
+    }
 
-  // Aktualizace rob cooldown
-  async updateRobCooldown(userId, timestamp) {
-    await db.update(users)
-      .set({ 
-        lastRob: timestamp,
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-  }
+    // Aktualizace cooldownů
+    async updateRobCooldown(userId, timestamp) {
+        this.db.prepare(`
+            UPDATE users 
+            SET last_rob = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(timestamp.toISOString(), userId);
+    }
 
-  // Aktualizace povolání
-  async updateUserJob(userId, jobName) {
-    await db.update(users)
-      .set({ 
-        job: jobName,
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-  }
+    async updateUserJob(userId, jobName) {
+        this.db.prepare(`
+            UPDATE users 
+            SET job = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `).run(jobName, userId);
+    }
 
-  // Vytvoření investice
-  async createInvestment(userId, amount) {
-    const insertInvestment = {
-      userId,
-      name: 'Portfolio Investment',
-      amount: amount.toString(),
-      type: 'portfolio',
-      buyPrice: amount.toString(),
-      currentPrice: amount.toString()
-    };
-    
-    await db.insert(investments).values(insertInvestment);
-  }
+    // Investice
+    async createInvestment(userId, amount) {
+        this.db.prepare(`
+            INSERT INTO investments (userId, name, amount, type, buyPrice, currentPrice)
+            VALUES (?, 'Portfolio Investment', ?, 'portfolio', ?, ?)
+        `).run(userId, amount.toString(), amount.toString(), amount.toString());
+    }
 
-  // Získání uživatelských investic
-  async getUserInvestments(userId) {
-    return await db
-      .select()
-      .from(investments)
-      .where(eq(investments.userId, userId))
-      .orderBy(desc(investments.createdAt));
-  }
+    async getUserInvestments(userId) {
+        return this.db.prepare(`
+            SELECT * FROM investments 
+            WHERE userId = ? 
+            ORDER BY created_at DESC
+        `).all(userId);
+    }
 
-  // Výběr všech investic
-  async collectAllInvestments(userId) {
-    await db.delete(investments)
-      .where(eq(investments.userId, userId));
-  }
+    async collectAllInvestments(userId) {
+        this.db.prepare(`
+            DELETE FROM investments 
+            WHERE userId = ?
+        `).run(userId);
+    }
 }
 
 const economyService = new EconomyService();
