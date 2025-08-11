@@ -44,7 +44,7 @@ async function initialize() {
         logger.info('Události načteny úspěšně');
         
         // Login to Discord
-        await client.login(process.env.TOKEN);
+        await client.login(process.env.BOT_TOKEN);
         
     } catch (error) {
         logger.error('Nepodařilo se inicializovat bota:', error);
