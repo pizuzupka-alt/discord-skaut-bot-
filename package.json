@@ -22,4 +22,22 @@
     "play-dl": "^1.9.7",
     "ytdl-core": "^4.11.5"
   }
+  const { SlashCommandBuilder } = require('discord.js');
+const economy = require('../server/economy');
+
+module.exports = {
+    data: new SlashCommandBuilder()
+        .setName('daily')
+        .setDescription('Vyzvedni si denní odměnu!'),
+
+    async execute(interaction) {
+        try {
+            const result = economy.daily(interaction.user.id, interaction.user.username);
+            await interaction.reply(result.message);
+        } catch (error) {
+            console.error('Chyba v daily příkazu:', error);
+            await interaction.reply('❌ Nastala chyba!');
+        }
+    },
+};
 }
