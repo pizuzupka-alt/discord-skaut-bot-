@@ -20,7 +20,6 @@
     "express": "^5.1.0",
     "opusscript": "^0.0.8",
     "play-dl": "^1.9.7",
-    "ytdl-core": "^4.11.5",
-    "better-sqlite3": "^8.7.0"
+    "ytdl-core": "^4.11.5"
   }
 }
