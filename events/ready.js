@@ -1,32 +1,35 @@
-const { ActivityType } = require('discord.js');
-const logger = require('../utils/logger');
+const { Events } = require('discord.js');
 
 module.exports = {
-    name: 'ready',
+    name: Events.ClientReady,
     once: true,
     async execute(client) {
-        logger.info(`Připraven! Přihlášen jako ${client.user.tag}`);
-        logger.info(`Bot je na ${client.guilds.cache.size} serverech`);
-        logger.info(`Slouží ${client.users.cache.size} uživatelům`);
+        console.log(`[INFO] Připraven! Přihlášen jako ${client.user.tag}`);
+        console.log(`[INFO] Bot je na ${client.guilds.cache.size} serverech`);
         
-        // Set bot presence
-        const { presence } = client.config;
+        // Spočítání uživatelů
+        const totalUsers = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
+        console.log(`[INFO] Slouží ${totalUsers} uživatelům`);
+
+        // Nastavení presence (status)
         try {
-            await client.user.setPresence({
-                status: presence.status,
-                activities: presence.activities.map(activity => ({
-                    name: activity.name,
-                    type: ActivityType[Object.keys(ActivityType)[activity.type]] || ActivityType.Playing
-                }))
-            });
-            logger.info('Přítomnost bota nastavená úspěšně');
+            if (client.config && client.config.presence) {
+                const { presence } = client.config;
+                await client.user.setPresence(presence);
+                console.log(`[INFO] Nastavena presence: ${presence.activities[0]?.name || 'žádná'}`);
+            } else {
+                // Fallback pokud config neexistuje
+                await client.user.setPresence({
+                    activities: [{
+                        name: 'tvůj server',
+                        type: 'WATCHING'
+                    }],
+                    status: 'online'
+                });
+                console.log(`[INFO] Nastavena výchozí presence`);
+            }
         } catch (error) {
-            logger.error('Chyba při nastavení přítomnosti bota:', error);
+            console.error('[ERROR] Chyba při nastavování presence:', error);
         }
-        
-        // Log some basic stats every hour
-        setInterval(() => {
-            logger.info(`Statistiky bota - Servery: ${client.guilds.cache.size}, Uživatelé: ${client.users.cache.size}, Čas běhu: ${Math.floor(client.uptime / 1000 / 60)} minut`);
-        }, 60 * 60 * 1000);
-    }
+    },
 };
